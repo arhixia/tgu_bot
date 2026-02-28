@@ -147,7 +147,7 @@ async def approve_task(callback: CallbackQuery, state: FSMContext, session: Asyn
     await callback.message.answer(f"✅ Задание {task_index + 1} одобрено и сохранено в пул.")
     await callback.answer()
 
-    await _check_review_complete(callback.message, state, data, approved_count)
+    await _check_review_complete(callback.message, state, approved_count)
 
 
 @router.callback_query(F.data.startswith("treject_"), TeacherGenerateTask.reviewing_tasks)
@@ -163,11 +163,12 @@ async def reject_task(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
     approved_count = data.get("approved_count", 0)
-    await _check_review_complete(callback.message, state, data, approved_count)
+    await _check_review_complete(callback.message, state, approved_count)
 
 
-async def _check_review_complete(message: Message, state: FSMContext, data: dict, approved_count: int):
+async def _check_review_complete(message: Message, state: FSMContext, approved_count: int):
     """проверяем - все ли задания просмотрены, предлагаем продолжить или закончить"""
+    data = await state.get_data()
     total = data.get("count", 0)
     rejected_count = data.get("rejected_count", 0)
 

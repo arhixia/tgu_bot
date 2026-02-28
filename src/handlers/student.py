@@ -1,14 +1,15 @@
 # src/handlers/student.py
 
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, ReplyKeyboardRemove
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.db.models import AnswerStatus
 from src.states.student_states import StudentStudyMode
 from src.keyboards.student_kb import mode_selection_kb, study_menu_kb, themes_kb, skip_kb
 from src.services.user_service import get_user_by_telegram_id
-from src.services.task_service import get_all_themes, get_theme_by_id,get_next_task
+from src.services.task_service import get_all_themes, get_theme_by_id,get_next_task, save_answer
 from aiogram.types import FSInputFile
 import os
 
@@ -67,6 +68,12 @@ async def theme_chosen(callback: CallbackQuery, state: FSMContext, session: Asyn
     elif mode == "test":
         await state.set_state(StudentStudyMode.testing)
         user = await get_user_by_telegram_id(session, str(callback.from_user.id))
+        
+        await callback.message.answer(
+            "📝 Тестирование начинается!",
+            reply_markup=ReplyKeyboardRemove()  
+        )
+        
         await send_next_test_task(callback.message, state, session, user.id, theme_id)
 
     await callback.answer()
@@ -138,3 +145,82 @@ async def send_next_test_task(message: Message, state: FSMContext, session: Asyn
     caption=f"📝 Задание {task_count + 1}/10\n\nОтправьте фото с решением или пропустите.",
     reply_markup=skip_kb()
 )
+    
+    # Обработка фото от студента в режиме ОБУЧЕНИЯ
+@router.message(F.photo, StudentStudyMode.studying)
+async def handle_study_answer(message: Message, state: FSMContext, session: AsyncSession):
+    data = await state.get_data()
+    current_task_id = data.get("current_task_id")
+
+    if not current_task_id:
+        await message.answer("Сначала получите задание — нажмите «Следующее задание».")
+        return
+
+    user = await get_user_by_telegram_id(session, str(message.from_user.id))
+
+    # МОК: любое фото = правильный ответ
+    await save_answer(
+        session=session,
+        student_id=user.id,
+        task_id=current_task_id,
+        status=AnswerStatus.CORRECT,
+        student_response_image=message.photo[-1].file_id,
+        llm_verdict="Мок: засчитано автоматически"
+    )
+
+    await message.answer(
+        "🎉 Отлично! Ответ засчитан как правильный.\n\n"
+        "Выберите действие:",
+        reply_markup=study_menu_kb()
+    )
+    await state.update_data(current_task_id=None)
+
+
+# Обработка фото от студента в режиме ТЕСТИРОВАНИЯ
+@router.message(F.photo, StudentStudyMode.testing)
+async def handle_test_answer(message: Message, state: FSMContext, session: AsyncSession):
+    data = await state.get_data()
+    current_task_id = data.get("current_task_id")
+    theme_id = data.get("theme_id")
+
+    if not current_task_id:
+        return
+
+    user = await get_user_by_telegram_id(session, str(message.from_user.id))
+
+    # МОК: любое фото = правильный ответ
+    await save_answer(
+        session=session,
+        student_id=user.id,
+        task_id=current_task_id,
+        status=AnswerStatus.CORRECT,
+        student_response_image=message.photo[-1].file_id,
+        llm_verdict="Мок: засчитано автоматически"
+    )
+
+    await state.update_data(current_task_id=None)
+    await send_next_test_task(message, state, session, user.id, theme_id)
+
+
+# пропуск задания в режиме ТЕСТИРОВАНИЯ
+@router.callback_query(F.data == "skip_test", StudentStudyMode.testing)
+async def skip_test_task(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
+    data = await state.get_data()
+    current_task_id = data.get("current_task_id")
+    theme_id = data.get("theme_id")
+
+    user = await get_user_by_telegram_id(session, str(callback.from_user.id))
+
+    if current_task_id:
+        await save_answer(
+            session=session,
+            student_id=user.id,
+            task_id=current_task_id,
+            status=AnswerStatus.SKIPPED,
+            student_response_image=None,
+            llm_verdict=None
+        )
+
+    await state.update_data(current_task_id=None)
+    await callback.answer()
+    await send_next_test_task(callback.message, state, session, user.id, theme_id)

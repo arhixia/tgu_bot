@@ -1,6 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from src.db.models import Answer, Task, TaskType, Theme
+from src.db.models import Answer, AnswerStatus, Group, Task, TaskType, Theme, User
 
 
 async def get_all_themes(session: AsyncSession) -> list[Theme]:
@@ -18,10 +18,16 @@ async def get_next_task(
     theme_id: int,
     mode: str
 ) -> Task | None:
-    """возвращает следующее задание которое студент ещё не решал"""
-    
     task_type = TaskType.TRAINING if mode == "study" else TaskType.TESTING
 
+    student_subq = (
+        select(Group.teacher_id)
+        .join(User, User.group_id == Group.id)
+        .where(User.id == student_id)
+        .scalar_subquery()
+    )
+
+    # Задания которые студент уже решал или пропустил
     answered_subq = (
         select(Answer.task_id)
         .where(Answer.student_id == student_id)
@@ -33,6 +39,7 @@ async def get_next_task(
         .where(Task.task_type == task_type)
         .where(Task.is_approved == True)
         .where(Task.id.not_in(answered_subq))
+        .where(Task.creator_id == student_subq)  
         .limit(1)
     )
     return result.scalar_one_or_none()
@@ -62,3 +69,25 @@ async def save_task(
     await session.commit()
     await session.refresh(task)
     return task
+
+
+async def save_answer(
+    session: AsyncSession,
+    student_id:int,
+    task_id:int,
+    status:AnswerStatus,
+    student_response_image: str | None = None,
+    llm_verdict: str | None = None,
+) -> Answer:
+    answer = Answer(
+        student_id = student_id,
+        task_id = task_id,
+        status = status,
+        student_response_image = student_response_image,
+        llm_verdict = llm_verdict
+    )
+    session.add(answer)
+    await session.commit()
+    await session.refresh(answer)
+    return answer
+    
