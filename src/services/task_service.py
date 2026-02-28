@@ -18,7 +18,7 @@ async def get_next_task(
     theme_id: int,
     mode: str
 ) -> Task | None:
-    """Возвращает следующее задание которое студент ещё не решал"""
+    """возвращает следующее задание которое студент ещё не решал"""
     
     task_type = TaskType.TRAINING if mode == "study" else TaskType.TESTING
 
@@ -36,3 +36,29 @@ async def get_next_task(
         .limit(1)
     )
     return result.scalar_one_or_none()
+
+
+async def save_task(
+    session: AsyncSession,
+    theme_id: int,
+    creator_id: int,
+    task_type: TaskType,
+    image_url: str,
+    description: str | None = None,
+    hint: str | None = None,
+    correct_answer: str | None = None,
+) -> Task:
+    task = Task(
+        theme_id=theme_id,
+        creator_id=creator_id,
+        task_type=task_type,
+        image_url=image_url,
+        description=description,
+        hint=hint,
+        correct_answer=correct_answer,
+        is_approved=True,  
+    )
+    session.add(task)
+    await session.commit()
+    await session.refresh(task)
+    return task

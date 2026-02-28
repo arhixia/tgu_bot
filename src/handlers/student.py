@@ -9,10 +9,24 @@ from src.states.student_states import StudentStudyMode
 from src.keyboards.student_kb import mode_selection_kb, study_menu_kb, themes_kb, skip_kb
 from src.services.user_service import get_user_by_telegram_id
 from src.services.task_service import get_all_themes, get_theme_by_id,get_next_task
+from aiogram.types import FSInputFile
+import os
+
+
 
 router = Router()
 
 TESTING_LIMIT = 10
+
+
+# МОК ПИКЧА К ЗАДАНИЮ ЗАМЕНИТЬ ПОТОМ
+TEST_IMAGE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "testimage.png"))
+
+def get_photo(image_url: str | None):
+    """возвращает FSInputFile заглушку если image_url пустой, иначе url"""
+    if image_url:
+        return image_url
+    return FSInputFile(TEST_IMAGE_PATH)
 
 
 @router.message(F.text == "📚 Режим обучения")
@@ -78,14 +92,14 @@ async def next_study_task(message: Message, state: FSMContext, session: AsyncSes
 
     # В режиме обучения показываем картинку + подсказку + правильный ответ
     await message.answer_photo(
-        photo=task.image_url,
-        caption=(
-            f"📌 <b>Задание</b>\n\n"
-            f"💡 <b>Подсказка:</b> {task.hint or 'не указана'}\n\n"
-            f"✅ <b>Правильный ответ:</b> {task.correct_answer or 'не указан'}\n\n"
-            "Сфотографируйте своё решение и отправьте боту."
-        )
+    photo=get_photo(task.image_url),
+    caption=(
+        f"📌 <b>Задание</b>\n\n"
+        f"💡 <b>Подсказка:</b> {task.hint or 'не указана'}\n\n"
+        f"✅ <b>Правильный ответ:</b> {task.correct_answer or 'не указан'}\n\n"
+        "Сфотографируйте своё решение и отправьте боту."
     )
+)
 
 
 @router.message(F.text == "⏸ Прервать обучение", StudentStudyMode.studying)
@@ -118,9 +132,9 @@ async def send_next_test_task(message: Message, state: FSMContext, session: Asyn
 
     await state.update_data(current_task_id=task.id, task_count=task_count + 1)
 
-    # В режиме тестирования — только картинка
+    # В режиме тестирования - только картинка
     await message.answer_photo(
-        photo=task.image_url,
-        caption=f"📝 Задание {task_count + 1}/10\n\nОтправьте фото с решением или пропустите.",
-        reply_markup=skip_kb()
-    )
+    photo=get_photo(task.image_url),
+    caption=f"📝 Задание {task_count + 1}/10\n\nОтправьте фото с решением или пропустите.",
+    reply_markup=skip_kb()
+)

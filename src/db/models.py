@@ -66,7 +66,7 @@ class Task(Base):
     creator_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     
     task_type = Column(SQLEnum(TaskType), nullable=False)
-    image_url = Column(String, nullable=False)
+    image_url = Column(String, nullable=True) # ЗАМЕНИТЬ НА FALSE и подключить к S3
     description = Column(Text, nullable=True) #описание
     hint = Column(Text, nullable=True)          #подсказка
     correct_answer = Column(Text, nullable=True) #правильный ответ к заданию

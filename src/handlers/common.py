@@ -10,6 +10,7 @@ from src.services.user_service import get_user_by_telegram_id
 from src.keyboards.student_kb import mode_selection_kb
 from src.states.student_states import StudentStudyMode
 from src.db.models import UserRole
+from src.keyboards.teacher_kb import teacher_main_kb
 
 router = Router()
 
@@ -35,9 +36,9 @@ async def cmd_start(message: Message, state: FSMContext, session: AsyncSession):
 
     elif user.role == UserRole.TEACHER:
         await message.answer(
-            f"👋 Привет, <b>{user.name}</b>!\n\n"
-            "Панель преподавателя — в разработке. 🚧"
-        )
+            f"👋 Привет, <b>{user.name}</b>!\n\nПанель преподавателя:",
+            reply_markup=teacher_main_kb()
+    )
 
 @router.message(Command("ping"))
 async def cmd_ping(message: Message):

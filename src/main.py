@@ -9,7 +9,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram import BaseMiddleware
 from typing import Callable, Dict, Any, Awaitable
 from aiogram.types import TelegramObject
-from src.handlers import common, student
+from src.handlers import common, student,teacher
 from src.db.config import TOKEN
 from src.db.database import SessionLocal
 
@@ -39,6 +39,7 @@ async def main():
 
     dp.include_router(common.router)
     dp.include_router(student.router)
+    dp.include_router(teacher.router)
 
     logging.info("Бот запущен")
     await dp.start_polling(bot)
