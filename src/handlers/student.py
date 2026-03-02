@@ -1,10 +1,11 @@
 # src/handlers/student.py
 
-from aiogram import Router, F
+from aiogram import Bot, Router, F
 from aiogram.types import Message, CallbackQuery, ReplyKeyboardRemove
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.files.s3_client import get_s3
 from src.db.models import AnswerStatus
 from src.states.student_states import StudentStudyMode
 from src.keyboards.student_kb import mode_selection_kb, study_menu_kb, themes_kb, skip_kb
@@ -146,9 +147,8 @@ async def send_next_test_task(message: Message, state: FSMContext, session: Asyn
     reply_markup=skip_kb()
 )
     
-    # Обработка фото от студента в режиме ОБУЧЕНИЯ
-@router.message(F.photo, StudentStudyMode.studying)
-async def handle_study_answer(message: Message, state: FSMContext, session: AsyncSession):
+@router.message(F.photo, StudentStudyMode.studying) #поменять при проверке 
+async def handle_study_answer(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
     data = await state.get_data()
     current_task_id = data.get("current_task_id")
 
@@ -158,27 +158,32 @@ async def handle_study_answer(message: Message, state: FSMContext, session: Asyn
 
     user = await get_user_by_telegram_id(session, str(message.from_user.id))
 
+    s3 = get_s3()
+    bot_file = await bot.get_file(message.photo[-1].file_id)
+    downloaded = await bot.download_file(bot_file.file_path)
+    key = s3.key_for_answer(user.id, current_task_id)
+    await s3.upload_file(downloaded.read(), key, content_type="image/jpeg")
+
     # МОК: любое фото = правильный ответ
     await save_answer(
         session=session,
         student_id=user.id,
         task_id=current_task_id,
         status=AnswerStatus.CORRECT,
-        student_response_image=message.photo[-1].file_id,
+        student_response_image=key,  
         llm_verdict="Мок: засчитано автоматически"
     )
 
     await message.answer(
-        "🎉 Отлично! Ответ засчитан как правильный.\n\n"
-        "Выберите действие:",
+        "🎉 Отлично! Ответ засчитан как правильный.\n\nВыберите действие:",
         reply_markup=study_menu_kb()
     )
     await state.update_data(current_task_id=None)
 
 
 # Обработка фото от студента в режиме ТЕСТИРОВАНИЯ
-@router.message(F.photo, StudentStudyMode.testing)
-async def handle_test_answer(message: Message, state: FSMContext, session: AsyncSession):
+@router.message(F.photo, StudentStudyMode.testing) #поменять при проверке 
+async def handle_test_answer(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
     data = await state.get_data()
     current_task_id = data.get("current_task_id")
     theme_id = data.get("theme_id")
@@ -188,13 +193,19 @@ async def handle_test_answer(message: Message, state: FSMContext, session: Async
 
     user = await get_user_by_telegram_id(session, str(message.from_user.id))
 
+    s3 = get_s3()
+    bot_file = await bot.get_file(message.photo[-1].file_id)
+    downloaded = await bot.download_file(bot_file.file_path)
+    key = s3.key_for_answer(user.id, current_task_id)
+    await s3.upload_file(downloaded.read(), key, content_type="image/jpeg")
+
     # МОК: любое фото = правильный ответ
     await save_answer(
         session=session,
         student_id=user.id,
         task_id=current_task_id,
         status=AnswerStatus.CORRECT,
-        student_response_image=message.photo[-1].file_id,
+        student_response_image=key,  
         llm_verdict="Мок: засчитано автоматически"
     )
 
