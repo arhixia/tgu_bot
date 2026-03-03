@@ -91,3 +91,6 @@ async def save_answer(
     await session.refresh(answer)
     return answer
     
+async def get_task_by_id(session:AsyncSession, task_id:int) -> Task | None:
+    result = await session.execute(select(Task).where(Task.id == task_id))
+    return result.scalar_one_or_none()

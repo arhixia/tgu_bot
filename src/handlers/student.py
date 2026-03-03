@@ -1,16 +1,16 @@
 # src/handlers/student.py
 
 from aiogram import Bot, Router, F
-from aiogram.types import Message, CallbackQuery, ReplyKeyboardRemove
+from aiogram.types import KeyboardButton, Message, CallbackQuery, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.files.s3_client import get_s3
 from src.db.models import AnswerStatus
 from src.states.student_states import StudentStudyMode
-from src.keyboards.student_kb import mode_selection_kb, study_menu_kb, themes_kb, skip_kb
+from src.keyboards.student_kb import confirm_show_answer_kb, mode_selection_kb, study_after_hint_kb, study_menu_kb, study_waiting_photo_kb, study_wrong_first_kb, study_wrong_second_kb, study_wrong_third_kb, themes_kb, skip_kb
 from src.services.user_service import get_user_by_telegram_id
-from src.services.task_service import get_all_themes, get_theme_by_id,get_next_task, save_answer
+from src.services.task_service import get_all_themes, get_task_by_id, get_theme_by_id,get_next_task, save_answer
 from aiogram.types import FSInputFile
 import os
 
@@ -96,18 +96,23 @@ async def next_study_task(message: Message, state: FSMContext, session: AsyncSes
         await state.set_state(StudentStudyMode.choosing_mode)
         return
 
-    await state.update_data(current_task_id=task.id)
-
-    # В режиме обучения показываем картинку + подсказку + правильный ответ
-    await message.answer_photo(
-    photo=get_photo(task.image_url),
-    caption=(
-        f"📌 <b>Задание</b>\n\n"
-        f"💡 <b>Подсказка:</b> {task.hint or 'не указана'}\n\n"
-        f"✅ <b>Правильный ответ:</b> {task.correct_answer or 'не указан'}\n\n"
-        "Сфотографируйте своё решение и отправьте боту."
+    await state.update_data(
+        current_task_id=task.id,
+        wrong_attempts=0,
+        hint_used=False,
+        last_answer_key=None
     )
-)
+    await state.set_state(StudentStudyMode.studying_waiting_photo)
+
+    await message.answer_photo(
+        photo=get_photo(task.image_url),
+        caption=(
+            "📌 <b>Задание</b>\n\n"
+            "⚠️ У вас <b>3 попытки</b> на это задание.\n\n"
+            "Сфотографируйте решение и отправьте боту."
+        ),
+        reply_markup=study_menu_kb()
+    )
 
 
 @router.message(F.text == "⏸ Прервать обучение", StudentStudyMode.studying)
@@ -115,6 +120,33 @@ async def pause_study(message: Message, state: FSMContext):
     await state.set_state(StudentStudyMode.choosing_mode)
     await message.answer("⏸ Обучение приостановлено.", reply_markup=mode_selection_kb())
 
+
+@router.message(F.text == "⏸ Прервать обучение", StudentStudyMode.studying_waiting_photo)
+async def pause_study_waiting(message: Message, state: FSMContext):
+    await state.set_state(StudentStudyMode.choosing_mode)
+    await message.answer("⏸ Обучение приостановлено.", reply_markup=mode_selection_kb())
+
+@router.message(F.text == "➡️ Следующее задание", StudentStudyMode.studying_waiting_photo)
+async def skip_from_waiting_photo(message: Message, state: FSMContext, session: AsyncSession):
+    """Студент пропускает задание не отправив ответ"""
+    data = await state.get_data()
+    current_task_id = data.get("current_task_id")
+
+    if current_task_id:
+        user = await get_user_by_telegram_id(session, str(message.from_user.id))
+        await save_answer(
+            session=session,
+            student_id=user.id,
+            task_id=current_task_id,
+            status=AnswerStatus.SKIPPED,
+            student_response_image=None,
+            llm_verdict="Студент пропустил задание без ответа"
+        )
+
+    await state.update_data(current_task_id=None, wrong_attempts=0, hint_used=False, last_answer_key=None)
+    await state.set_state(StudentStudyMode.studying)
+    await next_study_task(message, state, session)
+    
 
 async def send_next_test_task(message: Message, state: FSMContext, session: AsyncSession, user_id: int, theme_id: int):
     data = await state.get_data()
@@ -147,14 +179,12 @@ async def send_next_test_task(message: Message, state: FSMContext, session: Asyn
     reply_markup=skip_kb()
 )
     
-@router.message(F.photo, StudentStudyMode.studying) #поменять при проверке 
+@router.message(F.photo, StudentStudyMode.studying_waiting_photo)
 async def handle_study_answer(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
     data = await state.get_data()
     current_task_id = data.get("current_task_id")
-
-    if not current_task_id:
-        await message.answer("Сначала получите задание — нажмите «Следующее задание».")
-        return
+    wrong_attempts = data.get("wrong_attempts", 0)
+    hint_used = data.get("hint_used", False)
 
     user = await get_user_by_telegram_id(session, str(message.from_user.id))
 
@@ -164,22 +194,62 @@ async def handle_study_answer(message: Message, state: FSMContext, session: Asyn
     key = s3.key_for_answer(user.id, current_task_id)
     await s3.upload_file(downloaded.read(), key, content_type="image/jpeg")
 
-    # МОК: любое фото = правильный ответ
-    await save_answer(
-        session=session,
-        student_id=user.id,
-        task_id=current_task_id,
-        status=AnswerStatus.CORRECT,
-        student_response_image=key,  
-        llm_verdict="Мок: засчитано автоматически"
-    )
+    is_correct = False  # <- заменить на LLM
 
-    await message.answer(
-        "🎉 Отлично! Ответ засчитан как правильный.\n\nВыберите действие:",
-        reply_markup=study_menu_kb()
-    )
-    await state.update_data(current_task_id=None)
+    if is_correct:
+        await save_answer(
+            session=session,
+            student_id=user.id,
+            task_id=current_task_id,
+            status=AnswerStatus.CORRECT,
+            student_response_image=key,
+            llm_verdict="Правильно"
+        )
+        await state.update_data(current_task_id=None, wrong_attempts=0, hint_used=False)
+        await state.set_state(StudentStudyMode.studying)
+        await message.answer(
+            "🎉 Правильно! Отличная работа!\n\nВыберите действие:",
+            reply_markup=study_menu_kb()
+        )
+    else:
+        wrong_attempts += 1
+        await state.update_data(wrong_attempts=wrong_attempts, last_answer_key=key)
+        # После обработки фото — переключаем обратно в studying (не ждём фото)
+        await state.set_state(StudentStudyMode.studying)
 
+        if wrong_attempts == 1:
+            await message.answer(
+                "❌ Ответ неверный.\n\n"
+                "Нажмите <b>«🔄 Попробовать ещё раз»</b> чтобы отправить новое фото.",
+                reply_markup=study_wrong_first_kb()
+            )
+        elif wrong_attempts == 2:
+            await message.answer(
+                "❌ Снова неверно.\n\n"
+                "Нажмите <b>«🔄 Попробовать ещё раз»</b> чтобы отправить новое фото.",
+                reply_markup=study_wrong_second_kb(hint_used=hint_used)
+            )
+        else:
+            await message.answer(
+                "❌ Попытки исчерпаны. Посмотрите правильный ответ или перейдите к следующему заданию.",
+                reply_markup=study_wrong_third_kb()
+            )
+
+
+
+@router.message(F.photo, StudentStudyMode.studying)
+async def ignore_photo_studying(message: Message, state: FSMContext):
+    data = await state.get_data()
+    wrong_attempts = data.get("wrong_attempts", 0)
+
+    if wrong_attempts == 0:
+        await message.answer(
+            "Нажмите <b>«➡️ Следующее задание»</b> чтобы получить задание."
+        )
+    else:
+        await message.answer(
+            "Нажмите <b>«🔄 Попробовать ещё раз»</b> чтобы отправить новое решение."
+        )
 
 # Обработка фото от студента в режиме ТЕСТИРОВАНИЯ
 @router.message(F.photo, StudentStudyMode.testing) #поменять при проверке 
@@ -235,3 +305,132 @@ async def skip_test_task(callback: CallbackQuery, state: FSMContext, session: As
     await state.update_data(current_task_id=None)
     await callback.answer()
     await send_next_test_task(callback.message, state, session, user.id, theme_id)
+
+
+#показываем подсказку 
+@router.message(F.text == "💡 Подсказка", StudentStudyMode.studying)
+async def show_hint(message: Message, state: FSMContext, session: AsyncSession):
+    data = await state.get_data()
+    current_task_id = data.get("current_task_id")
+    if not current_task_id:
+        return
+
+    task = await get_task_by_id(session, current_task_id)
+    await message.answer(f"💡 <b>Подсказка:</b>\n\n{task.hint or 'Подсказка не указана'}")
+
+    await state.update_data(hint_used=True)
+    await message.answer(
+        "Нажмите <b>«🔄 Попробовать ещё раз»</b> чтобы отправить новое решение:",
+        reply_markup=study_after_hint_kb()
+    )
+
+
+@router.message(F.text == "🔄 Попробовать ещё раз", StudentStudyMode.studying)
+async def retry_task(message: Message, state: FSMContext):
+    await state.set_state(StudentStudyMode.studying_waiting_photo)
+    await message.answer("📸 Отправьте фото с новым решением.", reply_markup=study_waiting_photo_kb())
+
+
+@router.message(F.text == "✅ Просмотреть правильный ответ", StudentStudyMode.studying)
+async def confirm_show_answer(message: Message, state: FSMContext, session: AsyncSession):
+    data = await state.get_data()
+    wrong_attempts = data.get("wrong_attempts", 0)
+
+    if wrong_attempts >= 3:
+        #попытки исчерпаны
+        current_task_id = data.get("current_task_id")
+        last_answer_key = data.get("last_answer_key")
+
+        user = await get_user_by_telegram_id(session, str(message.from_user.id))
+        task = await get_task_by_id(session, current_task_id)
+
+        await save_answer(
+            session=session,
+            student_id=user.id,
+            task_id=current_task_id,
+            status=AnswerStatus.INCORRECT,
+            student_response_image=last_answer_key,
+            llm_verdict="Попытки исчерпаны"
+        )
+
+        await message.answer(
+            f"✅ <b>Правильный ответ:</b>\n\n{task.correct_answer or 'не указан'}"
+        )
+        await state.update_data(current_task_id=None, wrong_attempts=0, hint_used=False, last_answer_key=None)
+        await state.set_state(StudentStudyMode.studying)
+        await message.answer("Выберите действие:", reply_markup=study_menu_kb())
+    else:
+        #попытки есть
+        await message.answer(
+            "⚠️ <b>Внимание!</b>\n\n"
+            "После просмотра правильного ответа это задание будет засчитано как невыполненное "
+            "и больше не будет доступно.\n\n"
+            "Вы уверены?",
+            reply_markup=confirm_show_answer_kb()
+        )
+
+
+@router.callback_query(F.data == "confirm_answer_yes", StudentStudyMode.studying)
+async def show_correct_answer(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
+    data = await state.get_data()
+    current_task_id = data.get("current_task_id")
+    last_answer_key = data.get("last_answer_key")
+
+    user = await get_user_by_telegram_id(session, str(callback.from_user.id))
+    task = await get_task_by_id(session, current_task_id)
+
+    await save_answer(
+        session=session,
+        student_id=user.id,
+        task_id=current_task_id,
+        status=AnswerStatus.INCORRECT,
+        student_response_image=last_answer_key,
+        llm_verdict="Студент просмотрел правильный ответ"
+    )
+
+    await callback.message.edit_reply_markup(reply_markup=None)
+
+    await callback.message.answer(
+        f"✅ <b>Правильный ответ:</b>\n\n{task.correct_answer or 'не указан'}"
+    )
+    await state.update_data(current_task_id=None, wrong_attempts=0, hint_used=False, last_answer_key=None)
+    await state.set_state(StudentStudyMode.studying)
+    await callback.message.answer("Выберите действие:", reply_markup=study_menu_kb())
+    await callback.answer()
+
+
+#не показывать ответ 
+@router.callback_query(F.data == "confirm_answer_no", StudentStudyMode.studying)
+async def cancel_show_answer(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    hint_used = data.get("hint_used", False)
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.answer(
+        "Хорошо, продолжайте решать.",
+        reply_markup=study_wrong_second_kb(hint_used=hint_used)
+    )
+    await callback.answer()
+
+
+# следующее задание из состояния неправильного ответа
+@router.message(F.text == "➡️ Следующее задание", StudentStudyMode.studying)
+async def next_from_wrong(message: Message, state: FSMContext, session: AsyncSession):
+    data = await state.get_data()
+    current_task_id = data.get("current_task_id")
+    last_answer_key = data.get("last_answer_key")
+
+    if current_task_id:
+        user = await get_user_by_telegram_id(session, str(message.from_user.id))
+        await save_answer(
+            session=session,
+            student_id=user.id,
+            task_id=current_task_id,
+            status=AnswerStatus.SKIPPED,
+            student_response_image=last_answer_key,
+            llm_verdict="Студент пропустил задание"
+        )
+
+    await state.update_data(current_task_id=None, wrong_attempts=0, hint_used=False, last_answer_key=None)
+    await next_study_task(message, state, session)
+
+
