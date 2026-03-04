@@ -109,7 +109,7 @@ async def next_study_task(message: Message, state: FSMContext, session: AsyncSes
         caption=(
             "📌 <b>Задание</b>\n\n"
             "⚠️ У вас <b>3 попытки</b> на это задание.\n\n"
-            "Сфотографируйте решение и отправьте боту."
+            "Сфотографируйте ответ и отправьте боту."
         ),
         reply_markup=study_menu_kb()
     )
@@ -125,6 +125,7 @@ async def pause_study(message: Message, state: FSMContext):
 async def pause_study_waiting(message: Message, state: FSMContext):
     await state.set_state(StudentStudyMode.choosing_mode)
     await message.answer("⏸ Обучение приостановлено.", reply_markup=mode_selection_kb())
+
 
 @router.message(F.text == "➡️ Следующее задание", StudentStudyMode.studying_waiting_photo)
 async def skip_from_waiting_photo(message: Message, state: FSMContext, session: AsyncSession):
@@ -175,10 +176,11 @@ async def send_next_test_task(message: Message, state: FSMContext, session: Asyn
     # В режиме тестирования - только картинка
     await message.answer_photo(
     photo=get_photo(task.image_url),
-    caption=f"📝 Задание {task_count + 1}/10\n\nОтправьте фото с решением или пропустите.",
+    caption=f"📝 Задание {task_count + 1}/10\n\nОтправьте фото с ответом или пропустите.",
     reply_markup=skip_kb()
 )
     
+
 @router.message(F.photo, StudentStudyMode.studying_waiting_photo)
 async def handle_study_answer(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
     data = await state.get_data()
@@ -248,8 +250,9 @@ async def ignore_photo_studying(message: Message, state: FSMContext):
         )
     else:
         await message.answer(
-            "Нажмите <b>«🔄 Попробовать ещё раз»</b> чтобы отправить новое решение."
+            "Нажмите <b>«🔄 Попробовать ещё раз»</b> чтобы отправить новый ответ."
         )
+
 
 # Обработка фото от студента в режиме ТЕСТИРОВАНИЯ
 @router.message(F.photo, StudentStudyMode.testing) #поменять при проверке 
@@ -320,7 +323,7 @@ async def show_hint(message: Message, state: FSMContext, session: AsyncSession):
 
     await state.update_data(hint_used=True)
     await message.answer(
-        "Нажмите <b>«🔄 Попробовать ещё раз»</b> чтобы отправить новое решение:",
+        "Нажмите <b>«🔄 Попробовать ещё раз»</b> чтобы отправить новый ответ:",
         reply_markup=study_after_hint_kb()
     )
 
@@ -328,7 +331,7 @@ async def show_hint(message: Message, state: FSMContext, session: AsyncSession):
 @router.message(F.text == "🔄 Попробовать ещё раз", StudentStudyMode.studying)
 async def retry_task(message: Message, state: FSMContext):
     await state.set_state(StudentStudyMode.studying_waiting_photo)
-    await message.answer("📸 Отправьте фото с новым решением.", reply_markup=study_waiting_photo_kb())
+    await message.answer("📸 Отправьте фото с новым ответом.", reply_markup=study_waiting_photo_kb())
 
 
 @router.message(F.text == "✅ Просмотреть правильный ответ", StudentStudyMode.studying)

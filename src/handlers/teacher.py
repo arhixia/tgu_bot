@@ -5,6 +5,8 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.files.s3_client import get_s3
+from src.services.llm_service import generate_task
 from src.states.teacher_states import TeacherGenerateTask
 from src.keyboards.teacher_kb import (
     teacher_main_kb, teacher_mode_kb,
@@ -79,41 +81,47 @@ async def _generate_and_send_tasks(
     count: int
 ):
     data = await state.get_data()
-    theme_name = data["theme_name"]
+    theme = await get_theme_by_id(session, data["theme_id"])
 
-    
-    test_image_path = os.path.join(os.path.dirname(__file__), "..", "testimage.png")
-    test_image_path = os.path.abspath(test_image_path)
+    generated = []
 
-    generated = [
-        {
-            "index": i,
-            "image_url": None,
-            "description": f"Вычислить интеграл (заглушка #{i + 1}) по теме «{theme_name}»",
-            "hint": f"Подсказка к заданию #{i + 1}",
-            "correct_answer": f"Ответ к заданию #{i + 1}",
-        }
-        for i in range(count)
-    ]
+    for i in range(count):
+        await message.answer(f"⏳ Генерирую задание {i + 1}/{count}...")
+        try:
+            result = await generate_task(theme.llm_prompt)
+            generated.append({
+                "index": i,
+                "image_path": result["image_path"],  
+                "image_url": None,                    
+                "hint": result["hint"],
+                "correct_answer": result["correct_answer"],
+                "description": f"Задание #{i + 1} по теме «{data['theme_name']}»",
+            })
+        except Exception as e:
+            await message.answer(f"⚠️ Не удалось сгенерировать задание {i + 1}: {e}")
+            continue
+
+    if not generated:
+        await message.answer("❌ Не удалось сгенерировать ни одного задания.")
+        await state.set_state(TeacherGenerateTask.choosing_count)
+        return
 
     await state.update_data(generated_tasks=generated)
     await state.set_state(TeacherGenerateTask.reviewing_tasks)
     await message.answer(
-        f"✅ Сгенерировано <b>{count}</b> заданий. Просмотрите каждое и одобрите или отклоните:"
+        f"✅ Сгенерировано <b>{len(generated)}</b> заданий. Просмотрите и одобрите:"
     )
 
     for task in generated:
         await message.answer_photo(
-            photo=FSInputFile(test_image_path),
+            photo=FSInputFile(task["image_path"]),
             caption=(
                 f"📌 <b>Задание {task['index'] + 1}</b>\n\n"
-                f"📝 {task['description']}\n\n"
                 f"💡 Подсказка: {task['hint']}\n"
                 f"✅ Ответ: {task['correct_answer']}"
             ),
             reply_markup=task_approve_kb(task["index"])
         )
-
 
 @router.callback_query(F.data.startswith("tapprove_"), TeacherGenerateTask.reviewing_tasks)
 async def approve_task(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
@@ -126,6 +134,14 @@ async def approve_task(callback: CallbackQuery, state: FSMContext, session: Asyn
     if not task_data:
         await callback.answer("Задание не найдено.")
         return
+    
+    s3 = get_s3()
+    with open(task_data["image_path"], "rb") as f:
+        image_bytes = f.read()
+    s3_key = s3.key_for_task()
+    await s3.upload_file(image_bytes, s3_key, content_type="image/png")
+
+    os.remove(task_data["image_path"])
 
     task_type = TaskType.TRAINING if data["mode"] == "study" else TaskType.TESTING
 
@@ -134,7 +150,7 @@ async def approve_task(callback: CallbackQuery, state: FSMContext, session: Asyn
         theme_id=data["theme_id"],
         creator_id=user.id,
         task_type=task_type,
-        image_url=task_data["image_url"],
+        image_url=s3_key,
         description=task_data["description"],
         hint=task_data["hint"],
         correct_answer=task_data["correct_answer"],
@@ -142,11 +158,29 @@ async def approve_task(callback: CallbackQuery, state: FSMContext, session: Asyn
 
     approved_count = data.get("approved_count", 0) + 1
     await state.update_data(approved_count=approved_count)
-
     await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.message.answer(f"✅ Задание {task_index + 1} одобрено и сохранено в пул.")
+    await callback.message.answer(f"✅ Задание {task_index + 1} одобрено и сохранено.")
+    await callback.answer()
+    await _check_review_complete(callback.message, state, approved_count)
+
+
+@router.callback_query(F.data.startswith("treject_"), TeacherGenerateTask.reviewing_tasks)
+async def reject_task(callback: CallbackQuery, state: FSMContext):
+    task_index = int(callback.data.split("_")[1])
+    data = await state.get_data()
+
+    # Удаляем временный файл при отклонении
+    task_data = next((t for t in data.get("generated_tasks", []) if t["index"] == task_index), None)
+    if task_data and task_data.get("image_path") and os.path.exists(task_data["image_path"]):
+        os.remove(task_data["image_path"])
+
+    rejected_count = data.get("rejected_count", 0) + 1
+    await state.update_data(rejected_count=rejected_count)
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.answer(f"❌ Задание {task_index + 1} отклонено.")
     await callback.answer()
 
+    approved_count = data.get("approved_count", 0)
     await _check_review_complete(callback.message, state, approved_count)
 
 
