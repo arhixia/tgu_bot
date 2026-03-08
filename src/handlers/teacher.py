@@ -84,15 +84,17 @@ async def _generate_and_send_tasks(
     theme = await get_theme_by_id(session, data["theme_id"])
 
     generated = []
+    previous_answers = [] 
 
     for i in range(count):
         await message.answer(f"⏳ Генерирую задание {i + 1}/{count}...")
         try:
-            result = await generate_task(theme.llm_prompt)
+            result = await generate_task(theme.llm_prompt, previous_tasks=previous_answers)
+            previous_answers.append(result["correct_answer"])  
             generated.append({
                 "index": i,
-                "image_path": result["image_path"],  
-                "image_url": None,                    
+                "image_path": result["image_path"],
+                "image_url": None,
                 "hint": result["hint"],
                 "correct_answer": result["correct_answer"],
                 "description": f"Задание #{i + 1} по теме «{data['theme_name']}»",
@@ -176,22 +178,6 @@ async def reject_task(callback: CallbackQuery, state: FSMContext):
 
     rejected_count = data.get("rejected_count", 0) + 1
     await state.update_data(rejected_count=rejected_count)
-    await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.message.answer(f"❌ Задание {task_index + 1} отклонено.")
-    await callback.answer()
-
-    approved_count = data.get("approved_count", 0)
-    await _check_review_complete(callback.message, state, approved_count)
-
-
-@router.callback_query(F.data.startswith("treject_"), TeacherGenerateTask.reviewing_tasks)
-async def reject_task(callback: CallbackQuery, state: FSMContext):
-    task_index = int(callback.data.split("_")[1])
-    data = await state.get_data()
-
-    rejected_count = data.get("rejected_count", 0) + 1
-    await state.update_data(rejected_count=rejected_count)
-
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer(f"❌ Задание {task_index + 1} отклонено.")
     await callback.answer()

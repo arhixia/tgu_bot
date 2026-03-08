@@ -39,7 +39,3 @@ async def cmd_start(message: Message, state: FSMContext, session: AsyncSession):
             f"👋 Привет, <b>{user.name}</b>!\n\nПанель преподавателя:",
             reply_markup=teacher_main_kb()
     )
-
-@router.message(Command("ping"))
-async def cmd_ping(message: Message):
-    await message.answer("pong 🏓")

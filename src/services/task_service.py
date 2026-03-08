@@ -94,3 +94,31 @@ async def save_answer(
 async def get_task_by_id(session:AsyncSession, task_id:int) -> Task | None:
     result = await session.execute(select(Task).where(Task.id == task_id))
     return result.scalar_one_or_none()
+
+
+async def get_test_results(
+    session: AsyncSession,
+    student_id: int,
+    theme_id: int,
+) -> dict:
+    """stats по завершённому тесту"""
+    result = await session.execute(
+        select(Answer)
+        .join(Task, Task.id == Answer.task_id)
+        .where(Answer.student_id == student_id)
+        .where(Task.theme_id == theme_id)
+        .where(Task.task_type == TaskType.TESTING)
+    )
+    answers = result.scalars().all()
+
+    total = len(answers)
+    correct = sum(1 for a in answers if a.status == AnswerStatus.CORRECT)
+    incorrect = sum(1 for a in answers if a.status == AnswerStatus.INCORRECT)
+    skipped = sum(1 for a in answers if a.status == AnswerStatus.SKIPPED)
+
+    return {
+        "total": total,
+        "correct": correct,
+        "incorrect": incorrect,
+        "skipped": skipped,
+    }
