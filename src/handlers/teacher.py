@@ -84,13 +84,13 @@ async def _generate_and_send_tasks(
     theme = await get_theme_by_id(session, data["theme_id"])
 
     generated = []
-    previous_answers = [] 
+    previous_answers = []
 
     for i in range(count):
         await message.answer(f"⏳ Генерирую задание {i + 1}/{count}...")
         try:
             result = await generate_task(theme.llm_prompt, previous_tasks=previous_answers)
-            previous_answers.append(result["correct_answer"])  
+            previous_answers.append(result["correct_answer"])
             generated.append({
                 "index": i,
                 "image_path": result["image_path"],
@@ -108,10 +108,12 @@ async def _generate_and_send_tasks(
         await state.set_state(TeacherGenerateTask.choosing_count)
         return
 
-    await state.update_data(generated_tasks=generated)
+    actual_count = len(generated)
+    await state.update_data(generated_tasks=generated, count=actual_count)
     await state.set_state(TeacherGenerateTask.reviewing_tasks)
+
     await message.answer(
-        f"✅ Сгенерировано <b>{len(generated)}</b> заданий. Просмотрите и одобрите:"
+        f"✅ Сгенерировано <b>{actual_count}</b> заданий. Просмотрите и одобрите:"
     )
 
     for task in generated:

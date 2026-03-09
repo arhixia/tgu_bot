@@ -1,5 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import func, select
 from src.db.models import Answer, AnswerStatus, Group, Task, TaskType, Theme, User
 
 
@@ -39,7 +39,8 @@ async def get_next_task(
         .where(Task.task_type == task_type)
         .where(Task.is_approved == True)
         .where(Task.id.not_in(answered_subq))
-        .where(Task.creator_id == student_subq)  
+        .where(Task.creator_id == student_subq) 
+        .order_by(func.random()) 
         .limit(1)
     )
     return result.scalar_one_or_none()

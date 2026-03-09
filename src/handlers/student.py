@@ -239,7 +239,7 @@ async def handle_study_answer(message: Message, state: FSMContext, session: Asyn
         await state.update_data(current_task_id=None, wrong_attempts=0, hint_used=False)
         await state.set_state(StudentStudyMode.studying)
         await message.answer(
-            f"🎉 Правильно! {comment}\n\nВыберите действие:",
+            f"🎉 Правильно!\n\nВыберите действие:",
             reply_markup=study_menu_kb()
         )
     else:
@@ -281,8 +281,7 @@ async def ignore_photo_studying(message: Message, state: FSMContext):
         )
 
 
-# Обработка фото от студента в режиме ТЕСТИРОВАНИЯ
-@router.message(F.photo, StudentStudyMode.testing) #поменять при проверке 
+@router.message(F.photo, StudentStudyMode.testing)
 async def handle_test_answer(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
     data = await state.get_data()
     current_task_id = data.get("current_task_id")
@@ -292,22 +291,48 @@ async def handle_test_answer(message: Message, state: FSMContext, session: Async
         return
 
     user = await get_user_by_telegram_id(session, str(message.from_user.id))
+    task = await get_task_by_id(session, current_task_id)
 
-    s3 = get_s3()
     bot_file = await bot.get_file(message.photo[-1].file_id)
     downloaded = await bot.download_file(bot_file.file_path)
-    key = s3.key_for_answer(user.id, current_task_id)
-    await s3.upload_file(downloaded.read(), key, content_type="image/jpeg")
+    image_bytes = downloaded.read()
 
-    # МОК: любое фото = правильный ответ
+    await message.answer("🔍 Проверяю ответ...")
+    result = await check_answer(
+        correct_answer=task.correct_answer,
+        student_image_bytes=image_bytes,
+    )
+
+    if result.get("unreadable"):
+        await message.answer(
+            "📷 Не могу разобрать что написано на фото.\n\n"
+            "Пожалуйста, сфотографируйте ответ чётче и отправьте ещё раз.",
+            reply_markup=skip_kb()
+        )
+        return
+
+    # Загружаем фото в S3
+    s3 = get_s3()
+    key = s3.key_for_answer(user.id, current_task_id)
+    await s3.upload_file(image_bytes, key, content_type="image/jpeg")
+
+    is_correct = result.get("correct", False)
+    comment = result.get("comment", "")
+
+    status = AnswerStatus.CORRECT if is_correct else AnswerStatus.INCORRECT
     await save_answer(
         session=session,
         student_id=user.id,
         task_id=current_task_id,
-        status=AnswerStatus.CORRECT,
-        student_response_image=key,  
-        llm_verdict="Мок: засчитано автоматически"
+        status=status,
+        student_response_image=key,
+        llm_verdict=comment
     )
+
+    if is_correct:
+        await message.answer(f"🎉 Правильно!")
+    else:
+        await message.answer(f"❌ Неверно.\n\nПереходим к следующему заданию.")
 
     await state.update_data(current_task_id=None)
     await send_next_test_task(message, state, session, user.id, theme_id)
