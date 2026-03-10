@@ -21,16 +21,14 @@ router = Router()
 
 TESTING_LIMIT = 10
 
-
-# МОК ПИКЧА К ЗАДАНИЮ ЗАМЕНИТЬ ПОТОМ
-TEST_IMAGE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "testimage.png"))
+_processing_media_groups: set[str] = set()
 
 async def get_photo_url(image_url: str | None) -> str | FSInputFile:
-    """Возвращает presigned URL из S3 или заглушку"""
+    """возвращает presigned URL из S3"""
     if image_url:
         s3 = get_s3()
         return await s3.get_presigned_url(image_url, expires=3600)
-    return FSInputFile(TEST_IMAGE_PATH)
+
 
 
 @router.message(F.text == "📚 Режим обучения")
@@ -156,7 +154,10 @@ async def send_next_test_task(message: Message, state: FSMContext, session: Asyn
     task_count = data.get("task_count", 0)
 
     if task_count >= TESTING_LIMIT:
-        stats = await get_test_results(session, user_id, theme_id)
+        stats = await get_test_results(
+        session, user_id, theme_id,
+        task_ids=data.get("test_task_ids", [])
+    )
         await message.answer(
             "✅ <b>Тестирование завершено!</b>\n\n"
             f"📊 Выполнено заданий: <b>{stats['total']}</b>\n"
@@ -171,7 +172,10 @@ async def send_next_test_task(message: Message, state: FSMContext, session: Asyn
     task = await get_next_task(session, user_id, theme_id, mode="test")
 
     if not task:
-        stats = await get_test_results(session, user_id, theme_id)
+        stats = await get_test_results(
+        session, user_id, theme_id,
+        task_ids=data.get("test_task_ids", [])
+    )
         await message.answer(
             "📭 Задания по этой теме закончились.\n\n"
             f"📊 Выполнено заданий: <b>{stats['total']}</b>\n"
@@ -183,7 +187,11 @@ async def send_next_test_task(message: Message, state: FSMContext, session: Asyn
         await state.set_state(StudentStudyMode.choosing_mode)
         return
 
-    await state.update_data(current_task_id=task.id, task_count=task_count + 1)
+    await state.update_data(
+        current_task_id=task.id,
+        task_count=task_count + 1,
+        test_task_ids=data.get("test_task_ids", []) + [task.id]
+    )
 
     await message.answer_photo(
         photo=await get_photo_url(task.image_url),
@@ -194,6 +202,9 @@ async def send_next_test_task(message: Message, state: FSMContext, session: Asyn
 
 @router.message(F.photo, StudentStudyMode.studying_waiting_photo)
 async def handle_study_answer(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
+    if message.media_group_id:
+        await message.answer("📷 Отправь <b>только одно фото</b> за раз.")
+        return
     data = await state.get_data()
     current_task_id = data.get("current_task_id")
     wrong_attempts = data.get("wrong_attempts", 0)
@@ -205,7 +216,7 @@ async def handle_study_answer(message: Message, state: FSMContext, session: Asyn
     bot_file = await bot.get_file(message.photo[-1].file_id)
     downloaded = await bot.download_file(bot_file.file_path)
     image_bytes = downloaded.read()
-
+    
     await message.answer("🔍 Проверяю ответ...")
     result = await check_answer(
         correct_answer=task.correct_answer,
@@ -283,6 +294,9 @@ async def ignore_photo_studying(message: Message, state: FSMContext):
 
 @router.message(F.photo, StudentStudyMode.testing)
 async def handle_test_answer(message: Message, state: FSMContext, session: AsyncSession, bot: Bot):
+    if message.media_group_id:
+        await message.answer("📷 Отправь <b>только одно фото</b> за раз.")
+        return
     data = await state.get_data()
     current_task_id = data.get("current_task_id")
     theme_id = data.get("theme_id")

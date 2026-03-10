@@ -101,14 +101,17 @@ async def get_test_results(
     session: AsyncSession,
     student_id: int,
     theme_id: int,
+    task_ids: list[int],  # только задания текущей сессии
 ) -> dict:
-    """stats по завершённому тесту"""
+    if not task_ids:
+        return {"total": 0, "correct": 0, "incorrect": 0, "skipped": 0}
+
     result = await session.execute(
         select(Answer)
         .join(Task, Task.id == Answer.task_id)
         .where(Answer.student_id == student_id)
         .where(Task.theme_id == theme_id)
-        .where(Task.task_type == TaskType.TESTING)
+        .where(Answer.task_id.in_(task_ids))
     )
     answers = result.scalars().all()
 
@@ -117,9 +120,4 @@ async def get_test_results(
     incorrect = sum(1 for a in answers if a.status == AnswerStatus.INCORRECT)
     skipped = sum(1 for a in answers if a.status == AnswerStatus.SKIPPED)
 
-    return {
-        "total": total,
-        "correct": correct,
-        "incorrect": incorrect,
-        "skipped": skipped,
-    }
+    return {"total": total, "correct": correct, "incorrect": incorrect, "skipped": skipped}
