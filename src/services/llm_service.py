@@ -57,7 +57,9 @@ def _render_matplotlib(code: str, output_path: str):
     code = code.replace("{output_path}", safe_path)
     
     def clean_latex(content: str) -> str:
-        content = re.sub(r'\\\\([a-zA-Z])', r'\\\1', content)  
+        content = re.sub(r'\\\\([a-zA-Z])', r'\\\1', content)
+        content = re.sub(r'\$\$([^$]+)\$\$', r'$\1$', content)  
+        content = re.sub(r'\{\{([^}]+)\}\}', r'{\1}', content)  
         content = content.replace(r'\displaystyle', '')
         content = content.replace(r'\textstyle', '')
         content = content.replace(r'\scriptstyle', '')
@@ -65,7 +67,6 @@ def _render_matplotlib(code: str, output_path: str):
         content = content.replace(r'\left', '')
         content = content.replace(r'\right', '')
         content = content.replace(r'\!', '')
-        content = content.replace(r'\,', r'\,')  
         return content
     
     def fix_string(m):

@@ -121,3 +121,29 @@ async def get_test_results(
     skipped = sum(1 for a in answers if a.status == AnswerStatus.SKIPPED)
 
     return {"total": total, "correct": correct, "incorrect": incorrect, "skipped": skipped}
+
+
+async def count_available_test_tasks(
+    session: AsyncSession,
+    student_id: int,
+    theme_id: int,
+) -> int:
+    student_subq = (
+        select(Group.teacher_id)
+        .join(User,User.group_id== Group.id)
+        .where(User.id==student_id)
+        .scalar_subquery()
+    )
+    answered_subq = (
+        select(Answer.task_id)
+        .where(Answer.student_id == student_id)
+    )
+    result = await session.execute(
+        select(func.count(Task.id))
+        .where(Task.theme_id == theme_id)
+        .where(Task.task_type == TaskType.TESTING)
+        .where(Task.is_approved == True)
+        .where(Task.id.not_in(answered_subq))
+        .where(Task.creator_id == student_subq)
+    )
+    return result.scalar() or 0

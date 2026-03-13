@@ -10,7 +10,7 @@ from src.db.models import AnswerStatus
 from src.states.student_states import StudentStudyMode
 from src.keyboards.student_kb import confirm_show_answer_kb, mode_selection_kb, study_after_hint_kb, study_menu_kb, study_waiting_photo_kb, study_wrong_first_kb, study_wrong_second_kb, study_wrong_third_kb, themes_kb, skip_kb
 from src.services.user_service import get_user_by_telegram_id
-from src.services.task_service import get_all_themes, get_task_by_id, get_test_results, get_theme_by_id,get_next_task, save_answer
+from src.services.task_service import count_available_test_tasks, get_all_themes, get_task_by_id, get_test_results, get_theme_by_id,get_next_task, save_answer
 from src.services.llm_service import check_answer
 from aiogram.types import FSInputFile
 import os
@@ -67,14 +67,17 @@ async def theme_chosen(callback: CallbackQuery, state: FSMContext, session: Asyn
         )
 
     elif mode == "test":
-        await state.set_state(StudentStudyMode.testing)
         user = await get_user_by_telegram_id(session, str(callback.from_user.id))
+        available = await count_available_test_tasks(session, user.id, theme_id)
+        test_limit = min(available, TESTING_LIMIT)
+        
+        await state.set_state(StudentStudyMode.testing)
+        await state.update_data(theme_id=theme_id, task_count=0, test_task_ids=[], test_limit=test_limit)
         
         await callback.message.answer(
-            "📝 Тестирование начинается!",
-            reply_markup=ReplyKeyboardRemove()  
+            f"📝 Тестирование начинается! Заданий: <b>{test_limit}</b>",
+            reply_markup=ReplyKeyboardRemove()
         )
-        
         await send_next_test_task(callback.message, state, session, user.id, theme_id)
 
     await callback.answer()
@@ -152,8 +155,9 @@ async def skip_from_waiting_photo(message: Message, state: FSMContext, session: 
 async def send_next_test_task(message: Message, state: FSMContext, session: AsyncSession, user_id: int, theme_id: int):
     data = await state.get_data()
     task_count = data.get("task_count", 0)
+    test_limit = data.get("test_limit", TESTING_LIMIT)
 
-    if task_count >= TESTING_LIMIT:
+    if task_count >= test_limit:
         stats = await get_test_results(
         session, user_id, theme_id,
         task_ids=data.get("test_task_ids", [])
@@ -195,7 +199,7 @@ async def send_next_test_task(message: Message, state: FSMContext, session: Asyn
 
     await message.answer_photo(
         photo=await get_photo_url(task.image_url),
-        caption=f"📝 Задание {task_count + 1}/10\n\nОтправьте фото с ответом или пропустите.",
+        caption=f"📝 Задание {task_count + 1}/{test_limit}\n\nОтправьте фото с ответом или пропустите.",
         reply_markup=skip_kb()
     )
     
