@@ -301,18 +301,19 @@ async def handle_test_answer(message: Message, state: FSMContext, session: Async
     if message.media_group_id:
         await message.answer("📷 Отправь <b>только одно фото</b> за раз.")
         return
+    
     data = await state.get_data()
     current_task_id = data.get("current_task_id")
     theme_id = data.get("theme_id")
 
     if not current_task_id:
         return
-
+    
     user = await get_user_by_telegram_id(session, str(message.from_user.id))
     task = await get_task_by_id(session, current_task_id)
-
     bot_file = await bot.get_file(message.photo[-1].file_id)
     downloaded = await bot.download_file(bot_file.file_path)
+
     image_bytes = downloaded.read()
 
     await message.answer("🔍 Проверяю ответ...")
@@ -328,8 +329,7 @@ async def handle_test_answer(message: Message, state: FSMContext, session: Async
             reply_markup=skip_kb()
         )
         return
-
-    # Загружаем фото в S3
+    
     s3 = get_s3()
     key = s3.key_for_answer(user.id, current_task_id)
     await s3.upload_file(image_bytes, key, content_type="image/jpeg")
@@ -338,6 +338,7 @@ async def handle_test_answer(message: Message, state: FSMContext, session: Async
     comment = result.get("comment", "")
 
     status = AnswerStatus.CORRECT if is_correct else AnswerStatus.INCORRECT
+    
     await save_answer(
         session=session,
         student_id=user.id,
@@ -346,11 +347,6 @@ async def handle_test_answer(message: Message, state: FSMContext, session: Async
         student_response_image=key,
         llm_verdict=comment
     )
-
-    if is_correct:
-        await message.answer(f"🎉 Правильно!")
-    else:
-        await message.answer(f"❌ Неверно.\n\nПереходим к следующему заданию.")
 
     await state.update_data(current_task_id=None)
     await send_next_test_task(message, state, session, user.id, theme_id)
