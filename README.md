@@ -1,58 +1,102 @@
-для девопса:
-создать .env  файл в корне проекта с:
-ТГ:
-TOKEN=тг токен
+# README — Деплой и первоначальная настройка
 
-ДБ:
+## 1. Переменные окружения
+
+Создать файл `.env` в корне проекта:
+```env
+# Telegram
+TOKEN=тг_токен
+
+# База данных
 DB_HOST=...
 DB_PORT=...
 DB_NAME=...
 DB_USER=...
 DB_PASS=...
 
-LLM:
-YANDEX_CLOUD_FOLDER = "" ваша папка в yandex cloud 
-YANDEX_CLOUD_API_KEY = "" апи ключ 
-YANDEX_OAUTH_TOKEN="" 0auth token 
+# Yandex Cloud (LLM + OCR)
+YANDEX_CLOUD_FOLDER=""   # папка в Yandex Cloud
+YANDEX_CLOUD_API_KEY=""  # API ключ
+YANDEX_OAUTH_TOKEN=""    # OAuth токен
 
-S3: (я использовал селектел,приватное хранилище)
-ACCESS_KEY_S3 = ''
-SECRET_KEY_S3 = ''
-ENDPOINT_URL_S3 = 'https://s3.ru-1.storage.selcloud.ru'
-BUCKET_NAME_S3 = ''
+# S3 (Selectel, приватное хранилище)
+ACCESS_KEY_S3=""
+SECRET_KEY_S3=""
+ENDPOINT_URL_S3="https://s3.ru-1.storage.selcloud.ru"
+BUCKET_NAME_S3=""
+```
 
-провести миграции в бд
-в корне проекта
-alembic revision --autogenerate 
-alembic upgrade head (если убедились что все в порядке в migrations/version/ревизия)
+---
 
-сам бот запускается с корня проекта 
+## 2. Миграции базы данных
+
+Выполнить из корня проекта:
+```bash
+alembic revision --autogenerate
+```
+
+Проверить сгенерированный файл в `migrations/versions/` и если всё корректно:
+```bash
+alembic upgrade head
+```
+
+---
+
+## 3. Запуск бота
+```bash
 python -m src.main
+```
 
-чтобы начать работу в боте в бд мы добавляем следующее:
-1) Создаем преподавателя 
-insert into users (telegram_id, name, role)
+---
+
+## 4. Первоначальное наполнение БД
+
+Выполнять SQL-запросы строго по порядку.
+
+### 4.1 Создать преподавателя
+
+> `telegram_id` 
+```sql
+INSERT INTO users (telegram_id, name, role)
 VALUES ('123456789', 'Иванов Иван Иванович', 'teacher');
+```
 
-2) Создать группу и привязать к преподавателю
-insert into groups (name, teacher_id)
-VALUES ('ГРУППА1', 1); (id преподавателя в пункте 1)
+### 4.2 Создать группу и привязать к преподавателю
+```sql
+INSERT INTO groups (name, teacher_id)
+VALUES ('ГРУППА1', 1);
+--                  ^ id преподавателя из шага 4.1
+```
 
-3) Создать студента и добавить в группу
-insert into users (telegram_id, name, role, group_id)
-VALUES ('987654321', 'Петров Пётр', 'student', 1); 
+### 4.3 Создать студента и добавить в группу
+```sql
+INSERT INTO users (telegram_id, name, role, group_id)
+VALUES ('987654321', 'Петров Пётр', 'student', 1);
+--                                              ^ id группы из шага 4.2
+```
 
-4) Обновим преподавателя и присвоим ему тоже группу 
-update users set group_id = 1 where id = id_преподавателя
+### 4.4 Привязать преподавателя к группе
+```sql
+UPDATE users
+SET group_id = 1        -- id группы из шага 4.2
+WHERE id = 1;           -- id преподавателя из шага 4.1
+```
 
-5) Вставляем также темы
-insert into themes (name, llm_prompt, theory)
+### 4.5 Добавить темы
+```sql
+INSERT INTO themes (name, llm_prompt, theory)
 VALUES (
     'Метод замены переменной',
-    'промпт',
-    'теория'
+    'промпт для LLM',
+    'текст теории для студентов'
 );
+```
 
-итого:
-есть два юзера уже которые работают в пределах своей группы 
+---
 
+## Итог
+
+После выполнения всех шагов в системе есть:
+- один преподаватель и один студент, работающие в рамках одной группы
+- темы, по которым преподаватель может генерировать задания через бота
+- задания создаются преподавателем через интерфейс бота — вручную в БД их добавлять не нужно
