@@ -18,10 +18,12 @@ from src.services.task_service import get_all_themes, get_theme_by_id, save_task
 from src.db.models import TaskType
 from aiogram.types import FSInputFile
 import os
+import logging
+
 
 
 router = Router()
-
+logger = logging.getLogger(__name__)
 
 @router.message(F.text == "➕ Сгенерировать задания")
 async def generate_start(message: Message, state: FSMContext, session: AsyncSession):
@@ -165,7 +167,7 @@ async def approve_task(callback: CallbackQuery, state: FSMContext, session: Asyn
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer(f"✅ Задание {task_index + 1} одобрено и сохранено.")
     await callback.answer()
-    await _check_review_complete(callback.message, state, approved_count)
+    await _check_review_complete(callback.message, state)
 
 
 @router.callback_query(F.data.startswith("treject_"), TeacherGenerateTask.reviewing_tasks)
@@ -184,23 +186,23 @@ async def reject_task(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer(f"❌ Задание {task_index + 1} отклонено.")
     await callback.answer()
 
-    approved_count = data.get("approved_count", 0)
-    await _check_review_complete(callback.message, state, approved_count)
+    await _check_review_complete(callback.message, state)
 
 
-async def _check_review_complete(message: Message, state: FSMContext, approved_count: int):
-    """проверяем - все ли задания просмотрены, предлагаем продолжить или закончить"""
+async def _check_review_complete(message: Message, state: FSMContext):
     data = await state.get_data()
     total = data.get("count", 0)
+    approved_count = data.get("approved_count", 0)
     rejected_count = data.get("rejected_count", 0)
-
+    
+    logger.info(f"_check_review_complete: approved={approved_count}, rejected={rejected_count}, total={total}")
+    
     if approved_count + rejected_count >= total:
         await message.answer(
             f"📊 Итог: одобрено <b>{approved_count}</b>, отклонено <b>{rejected_count}</b>.\n\n"
             "Хотите сгенерировать ещё задания по этой же теме?",
             reply_markup=teacher_after_review_kb()
         )
-
 
 @router.callback_query(F.data == "tgenerate_more", TeacherGenerateTask.reviewing_tasks)
 async def generate_more(callback: CallbackQuery, state: FSMContext):
